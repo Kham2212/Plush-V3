@@ -56,4 +56,3 @@ jobs:
         with:
           name: pulsevpn-android-10-16-debug-apk
           path: app/build/outputs/apk/debug/*.apk
-
