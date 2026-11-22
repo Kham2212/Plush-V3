@@ -9,8 +9,11 @@ import com.example.R
 import com.example.data.CachedVpnConfig
 import com.example.data.ConfigRepository
 import com.example.model.LibboxAvailability
+import com.example.model.MaintenanceConfig
 import com.example.model.SyncStatus
 import com.example.model.TrafficSpeed
+import com.example.model.VlessProfile
+import com.example.model.VmessProfile
 import com.example.model.VpnConnectionState
 import com.example.vpn.LibboxBridge
 import com.example.vpn.VmessVpnService
@@ -35,6 +38,7 @@ data class VpnUiState(
     val syncStatus: SyncStatus = SyncStatus.Idle,
     val libboxAvailability: LibboxAvailability = LibboxAvailability(false, "Not bundled"),
     val snackbarMessage: String? = null,
+    val maintenance: MaintenanceConfig = MaintenanceConfig(),
 )
 
 private data class LocalConfigSnapshot(
@@ -47,6 +51,7 @@ private data class LocalConfigSnapshot(
     val syncStatus: SyncStatus,
     val libboxAvailability: LibboxAvailability,
     val snackbarMessage: String?,
+    val maintenance: MaintenanceConfig,
 )
 
 class VpnViewModel internal constructor(
@@ -74,11 +79,12 @@ class VpnViewModel internal constructor(
             syncStatus = local.syncStatus,
             libboxAvailability = local.libboxAvailability,
             snackbarMessage = local.snackbarMessage,
+            maintenance = local.maintenance,
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = VpnUiState(),
+        initialValue = VpnUiState(maintenance = localState.value.maintenance),
     )
 
     init {
@@ -96,6 +102,7 @@ class VpnViewModel internal constructor(
             syncStatus = SyncStatus.Idle,
             libboxAvailability = LibboxBridge.detectLibbox(),
             snackbarMessage = null,
+            maintenance = cached.maintenance,
         )
 
     fun syncRemoteConfig(isAutoLaunch: Boolean = false) {
@@ -116,6 +123,7 @@ class VpnViewModel internal constructor(
                         servers = serverChoices(updated),
                         selectedServerId = updated.selectedServerId,
                         lastSyncEpochMs = updated.lastSyncEpochMs,
+                        maintenance = updated.maintenance,
                         syncStatus = SyncStatus.Success(msg),
                         snackbarMessage = if (isAutoLaunch) null else msg,
                     )
@@ -162,7 +170,12 @@ class VpnViewModel internal constructor(
     private fun serverChoices(cached: CachedVpnConfig): List<ServerChoice> =
         cached.servers.mapIndexed { index, server ->
             val profile = server.profile
-            val sensitiveValues = listOfNotNull(profile?.address, profile?.sni, profile?.wsHost, profile?.wsPath)
+            val transportValues = when (profile) {
+                is VmessProfile -> listOf(profile.wsHost, profile.wsPath)
+                is VlessProfile -> listOf(profile.host, profile.path, profile.uuid)
+                null -> emptyList()
+            }
+            val sensitiveValues = (listOfNotNull(profile?.address, profile?.sni) + transportValues)
                 .filter { it.isNotBlank() && it != "/" }
             val name = server.name.takeUnless { label ->
                 label.isBlank() || "://" in label ||
@@ -171,12 +184,15 @@ class VpnViewModel internal constructor(
             ServerChoice(server.id, name)
         }
 
+    fun isMaintenanceActive(): Boolean = localState.value.maintenance.enabled
+
     fun prepareVpnIntent(context: Context): android.content.Intent? {
         return VpnService.prepare(context)
     }
 
     fun startVpnConnection(context: Context) {
         val snapshot = localState.value
+        if (snapshot.maintenance.enabled) return
         val selectedName = snapshot.servers.firstOrNull { it.id == snapshot.selectedServerId }?.name
         VpnStateHolder.updateState(VpnConnectionState.Connecting, selectedName)
         VmessVpnService.startConnect(
@@ -188,6 +204,7 @@ class VpnViewModel internal constructor(
     }
 
     fun onVpnPermissionDenied() {
+        if (isMaintenanceActive()) return
         val msg = getApplication<Application>().getString(R.string.msg_vpn_permission_denied)
         VpnStateHolder.updateState(VpnConnectionState.Error(msg))
     }

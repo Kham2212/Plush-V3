@@ -2,10 +2,14 @@ package com.example.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.example.model.MaintenanceConfig
 import com.example.model.RemoteConfigPayload
 import com.example.model.RemoteServerEntry
 import com.example.model.VmessProfile
+import com.example.model.VpnProfile
+import com.example.vpn.RemoteConfigParser
 import com.example.vpn.VmessUriParser
+import com.example.vpn.parseVpnUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -19,8 +23,9 @@ data class CachedVpnConfig(
     val servers: List<RemoteServerEntry>,
     val selectedServerId: String,
     val selectedUri: String,
-    val selectedProfile: VmessProfile?,
+    val selectedProfile: VpnProfile?,
     val lastSyncEpochMs: Long,
+    val maintenance: MaintenanceConfig = MaintenanceConfig(),
 )
 
 class ConfigRepository(
@@ -41,10 +46,15 @@ class ConfigRepository(
 
         val cachedJson = prefs.getString(KEY_CACHED_REMOTE_JSON, null)
         val parsedRemote: RemoteConfigPayload? = if (!cachedJson.isNullOrBlank()) {
-            VmessUriParser.parseRemoteConfigJson(cachedJson).getOrNull()
+            RemoteConfigParser.parse(cachedJson).getOrNull()
         } else {
             null
         }
+
+        val maintenance = prefs.getString(KEY_MAINTENANCE_OVERRIDE, null)
+            ?.let { RemoteConfigParser.parse(it).getOrNull()?.maintenance }
+            ?: parsedRemote?.maintenance
+            ?: MaintenanceConfig()
 
         if (parsedRemote != null && parsedRemote.servers.isNotEmpty()) {
             val servers = if (savedSelectedId == MANUAL_SERVER_ID && fallbackProfile != null) {
@@ -67,8 +77,9 @@ class ConfigRepository(
                 servers = servers,
                 selectedServerId = selectedServer.id,
                 selectedUri = selectedServer.uri,
-                selectedProfile = selectedServer.profile ?: VmessUriParser.parse(selectedServer.uri).getOrNull(),
+                selectedProfile = selectedServer.profile ?: parseVpnUri(selectedServer.uri).getOrNull(),
                 lastSyncEpochMs = lastSync,
+                maintenance = maintenance,
             )
         }
 
@@ -87,7 +98,18 @@ class ConfigRepository(
             selectedUri = fallbackUri,
             selectedProfile = fallbackProfile,
             lastSyncEpochMs = lastSync,
+            maintenance = maintenance,
         )
+    }
+
+    fun observeMaintenance(onChange: (MaintenanceConfig) -> Unit): () -> Unit {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == KEY_CACHED_REMOTE_JSON || key == KEY_MAINTENANCE_OVERRIDE || key == null) {
+                onChange(loadCachedConfig().maintenance)
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        return { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
     fun getRemoteConfigUrl(): String {
@@ -115,7 +137,7 @@ class ConfigRepository(
         val chosen = current.servers.firstOrNull { it.id == serverId } ?: return@synchronized current
         prefs.edit()
             .putString(KEY_SELECTED_SERVER_ID, chosen.id)
-            .putString(KEY_ACTIVE_VMESS_URI, chosen.uri)
+            .apply { if (chosen.profile is VmessProfile) putString(KEY_ACTIVE_VMESS_URI, chosen.uri) }
             .apply()
         loadCachedConfig()
     }
@@ -155,6 +177,7 @@ class ConfigRepository(
     fun resetToDefault(): CachedVpnConfig {
         prefs.edit()
             .remove(KEY_CACHED_REMOTE_JSON)
+            .remove(KEY_MAINTENANCE_OVERRIDE)
             .remove(KEY_SELECTED_SERVER_ID)
             .putBoolean(KEY_LOCAL_BYPASS, true)
             .putString(KEY_ACTIVE_VMESS_URI, VmessUriParser.DEFAULT_VMESS_URI)
@@ -187,7 +210,7 @@ class ConfigRepository(
                     response.body?.string().orEmpty()
                 }
 
-                val parsedResult = VmessUriParser.parseRemoteConfigJson(bodyText)
+                val parsedResult = RemoteConfigParser.parse(bodyText)
                 if (parsedResult.isFailure) {
                     return@withContext Result.failure(
                         parsedResult.exceptionOrNull() ?: IllegalArgumentException("Invalid remote config JSON"),
@@ -196,19 +219,26 @@ class ConfigRepository(
 
                 val payload = parsedResult.getOrThrow()
                 synchronized(selectionLock) {
-                    val currentSelectedId = prefs.getString(KEY_SELECTED_SERVER_ID, null)
-                    val nextSelected = payload.servers.firstOrNull { it.id == currentSelectedId }
-                        ?: payload.servers.first()
-
-                    val now = System.currentTimeMillis()
-                    prefs.edit()
-                        .putString(KEY_REMOTE_CONFIG_URL, targetUrl)
-                        .putString(KEY_CACHED_REMOTE_JSON, bodyText.trim())
-                        .putBoolean(KEY_LOCAL_BYPASS, payload.localBypass)
-                        .putString(KEY_SELECTED_SERVER_ID, nextSelected.id)
-                        .putString(KEY_ACTIVE_VMESS_URI, nextSelected.uri)
-                        .putLong(KEY_LAST_SYNC_EPOCH_MS, now)
-                        .apply()
+                    prefs.edit().apply {
+                        putString(KEY_REMOTE_CONFIG_URL, targetUrl)
+                        putLong(KEY_LAST_SYNC_EPOCH_MS, System.currentTimeMillis())
+                        if (payload.servers.isEmpty()) {
+                            // A maintenance notice can arrive without servers. Keep the last usable list.
+                            putString(KEY_MAINTENANCE_OVERRIDE, bodyText.trim())
+                        } else {
+                            val currentSelectedId = prefs.getString(KEY_SELECTED_SERVER_ID, null)
+                            val nextSelected = payload.servers.firstOrNull { it.id == currentSelectedId }
+                                ?: payload.servers.first()
+                            putString(KEY_CACHED_REMOTE_JSON, bodyText.trim())
+                            remove(KEY_MAINTENANCE_OVERRIDE)
+                            putBoolean(KEY_LOCAL_BYPASS, payload.localBypass)
+                            putString(KEY_SELECTED_SERVER_ID, nextSelected.id)
+                            if (nextSelected.profile is VmessProfile) {
+                                putString(KEY_ACTIVE_VMESS_URI, nextSelected.uri)
+                            }
+                        }
+                        apply()
+                    }
 
                     Result.success(loadCachedConfig())
                 }
@@ -228,6 +258,7 @@ class ConfigRepository(
         private const val PREFS_NAME = "pulsevpn_prefs"
         private const val KEY_ACTIVE_VMESS_URI = "active_vmess_uri"
         private const val KEY_REMOTE_CONFIG_URL = "remote_config_url"
+        private const val KEY_MAINTENANCE_OVERRIDE = "maintenance_override_json"
         private const val KEY_CACHED_REMOTE_JSON = "cached_remote_json"
         private const val KEY_SELECTED_SERVER_ID = "selected_server_id"
         private const val KEY_LOCAL_BYPASS = "local_bypass"

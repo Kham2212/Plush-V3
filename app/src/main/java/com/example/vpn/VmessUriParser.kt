@@ -1,7 +1,6 @@
 package com.example.vpn
 
 import com.example.model.RemoteConfigPayload
-import com.example.model.RemoteServerEntry
 import com.example.model.VmessProfile
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -19,80 +18,8 @@ object VmessUriParser {
         "vmess://" + encodeBase64(DEFAULT_JSON_PAYLOAD.toByteArray(StandardCharsets.UTF_8))
     }
 
-    fun parseRemoteConfigJson(rawBody: String): Result<RemoteConfigPayload> {
-        val trimmed = rawBody.trim()
-        if (trimmed.isEmpty()) {
-            return Result.failure(IllegalArgumentException("Remote config response is empty"))
-        }
-
-        // Allow plain vmess:// line fallback if a custom URL returns raw text instead of JSON
-        if (trimmed.startsWith("vmess://", ignoreCase = true)) {
-            val singleUri = extractFirstVmessUri(trimmed)
-                ?: return Result.failure(IllegalArgumentException("Invalid vmess:// URI"))
-            val parsed = parse(singleUri).getOrElse { return Result.failure(it) }
-            return Result.success(
-                RemoteConfigPayload(
-                    localBypass = true,
-                    servers = listOf(
-                        RemoteServerEntry(
-                            id = "remote-single",
-                            name = parsed.remarks,
-                            uri = parsed.rawUri,
-                            enabled = true,
-                            profile = parsed,
-                        ),
-                    ),
-                ),
-            )
-        }
-
-        return try {
-            val root = JSONObject(trimmed)
-            val localBypass = root.optBoolean("local_bypass", true)
-            val serversArray = root.optJSONArray("servers")
-                ?: return Result.failure(IllegalArgumentException("Remote JSON missing 'servers' array"))
-
-            val parsedServers = mutableListOf<RemoteServerEntry>()
-            val seenServerIds = mutableSetOf<String>()
-            for (index in 0 until serversArray.length()) {
-                val obj = serversArray.optJSONObject(index) ?: continue
-                val enabled = obj.optBoolean("enabled", true)
-                if (!enabled) continue
-
-                val rawUri = obj.optString("uri", "").trim()
-                val profileResult = parse(rawUri)
-                if (profileResult.isFailure) continue
-
-                val profile = profileResult.getOrThrow()
-                val id = obj.optString("id", "").trim().ifBlank { "server-$index" }
-                if (!seenServerIds.add(id)) continue
-                val name = obj.optString("name", "").trim().ifBlank { profile.remarks }
-
-                parsedServers.add(
-                    RemoteServerEntry(
-                        id = id,
-                        name = name,
-                        uri = profile.rawUri,
-                        enabled = true,
-                        profile = profile.copy(remarks = name),
-                    ),
-                )
-            }
-
-            if (parsedServers.isEmpty()) {
-                Result.failure(IllegalArgumentException("No enabled valid VMess servers found in remote JSON"))
-            } else {
-                Result.success(
-                    RemoteConfigPayload(
-                        localBypass = localBypass,
-                        servers = parsedServers,
-                    ),
-                )
-            }
-        } catch (e: Exception) {
-            Result.failure(IllegalArgumentException("Malformed remote JSON: ${e.message}"))
-        }
-    }
+    fun parseRemoteConfigJson(rawBody: String): Result<RemoteConfigPayload> =
+        RemoteConfigParser.parse(rawBody)
 
     fun extractFirstVmessUri(rawBody: String): String? {
         return rawBody

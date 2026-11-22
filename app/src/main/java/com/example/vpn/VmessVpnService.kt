@@ -23,7 +23,6 @@ import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.data.ConfigRepository
-import com.example.model.VmessProfile
 import com.example.model.VpnConnectionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +46,8 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val isStopping = AtomicBoolean(false)
     private val tunnelStartup = Mutex()
+    private val configRepository by lazy { ConfigRepository(applicationContext) }
+    private var stopObservingMaintenance: (() -> Unit)? = null
 
     @Volatile
     private var activeConnectJob: Job? = null
@@ -59,7 +60,7 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
     private val tunFd = AtomicReference<Int?>(null)
 
     @Volatile
-    private var currentProfile: VmessProfile? = null
+    private var currentServerName: String? = null
 
     @Volatile
     private var currentLocalBypass: Boolean = true
@@ -70,6 +71,9 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        stopObservingMaintenance = configRepository.observeMaintenance { maintenance ->
+            if (maintenance.enabled) stopVpn(preserveError = false)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -81,7 +85,7 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
 
             ACTION_CONNECT, null -> {
                 isStopping.set(false)
-                val cached = ConfigRepository(applicationContext).loadCachedConfig()
+                val cached = configRepository.loadCachedConfig()
                 val providedUri = intent?.getStringExtra(EXTRA_VMESS_URI) ?: cached.selectedUri
                 val localBypass = intent?.getBooleanExtra(EXTRA_LOCAL_BYPASS, cached.localBypass)
                     ?: cached.localBypass
@@ -91,6 +95,10 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
                     title = getString(R.string.notification_title_connecting),
                     content = getString(R.string.notification_text_establishing),
                 )
+                if (cached.maintenance.enabled) {
+                    stopVpn(preserveError = false)
+                    return START_NOT_STICKY
+                }
                 connectAsync(providedUri, localBypass, serverName)
                 return START_STICKY
             }
@@ -106,6 +114,8 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
     }
 
     override fun onDestroy() {
+        stopObservingMaintenance?.invoke()
+        stopObservingMaintenance = null
         stopVpn(preserveError = false)
         serviceScope.cancel()
         super.onDestroy()
@@ -122,18 +132,18 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
                 if (!isActive) return@launch
                 closeActiveTunnelOnly()
 
-                val rawProfile = VmessUriParser.parse(vmessUri).getOrThrow()
-                val profile = if (serverName.isNullOrBlank()) rawProfile else rawProfile.copy(remarks = serverName)
+                val profile = parseVpnUri(vmessUri).getOrThrow()
+                val displayName = serverName?.takeIf { it.isNotBlank() } ?: profile.remarks
                 val availability = LibboxBridge.detectLibbox()
                 check(availability.isBundled) { "libbox.aar is missing or could not be loaded" }
-                currentProfile = profile
+                currentServerName = displayName
                 currentLocalBypass = localBypass
 
                 VpnStateHolder.appendLog("Initializing sing-box (${availability.versionLabel})…")
                 LibboxBridge.initializeCore(applicationContext)
 
                 VpnStateHolder.appendLog(
-                    "Starting BoxService -> ${profile.remarks} (${profile.address}:${profile.port})…",
+                    "Starting BoxService -> $displayName (${profile.address}:${profile.port})…",
                 )
                 val startedService = LibboxBridge.startService(this@VmessVpnService) { modern ->
                     SingBoxConfigBuilder.buildConfigJson(profile, localBypass, modern)
@@ -147,7 +157,7 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
                 withContext(Dispatchers.Main.immediate) {
                     if (isStopping.get()) return@withContext
                     val bypassModeLabel = if (localBypass) "LAN direct" else "Full tunnel"
-                    VpnStateHolder.updateState(VpnConnectionState.Connected, profile.remarks)
+                    VpnStateHolder.updateState(VpnConnectionState.Connected, displayName)
                     VpnStateHolder.appendLog("Tunnel active (DoH DNS + $bypassModeLabel)")
                     startTrafficMonitor()
 
@@ -235,9 +245,8 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
     }
 
     override fun openTun(spec: TunSpec): Int {
-        val profile = currentProfile
         val builder = Builder()
-            .setSession("PulseVPN • ${profile?.remarks ?: "VMess"}")
+            .setSession("PulseVPN • ${currentServerName ?: "VMess"}")
             .setMtu(spec.mtu)
 
         for (addr in spec.inet4Addresses) {

@@ -10,12 +10,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import com.example.model.MaintenanceConfig
 import com.example.model.VpnConnectionState
 import com.example.ads.AdMessage
 import com.example.ads.AdState
@@ -32,6 +35,37 @@ class PulseVpnScreenTest {
 
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun `maintenance shows notice and disables connection while sync stays available`() {
+        var state by mutableStateOf(
+            VpnUiState(maintenance = MaintenanceConfig(true, "Scheduled work", "Back at noon.")),
+        )
+        compose.setContent {
+            PulseVpnTheme {
+                PulseVpnScreen(
+                    uiState = state,
+                    onToggleConnection = {},
+                    onSelectServer = {},
+                    onSyncRemote = {},
+                    onDismissError = {},
+                    onConsumeSnackbar = {},
+                )
+            }
+        }
+        compose.onNodeWithText("Scheduled work").assertExists()
+        compose.onNodeWithText("Back at noon.").assertExists()
+        compose.onNodeWithTag("power_shield_button").assertIsNotEnabled()
+        compose.onNodeWithTag("sync_remote_button").assertIsEnabled()
+
+        compose.runOnIdle { state = state.copy(maintenance = MaintenanceConfig(enabled = true)) }
+        compose.onNodeWithText("VPN maintenance").assertExists()
+        compose.onNodeWithText("VPN connections are temporarily unavailable.", substring = true).assertExists()
+
+        compose.runOnIdle { state = state.copy(maintenance = MaintenanceConfig()) }
+        compose.onNodeWithText("VPN maintenance").assertDoesNotExist()
+        compose.onNodeWithTag("power_shield_button").assertIsEnabled()
+    }
 
     @Test
     fun `unavailable ad notice is visible while connecting and is consumed`() {
