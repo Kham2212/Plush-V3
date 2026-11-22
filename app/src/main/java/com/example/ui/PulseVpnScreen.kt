@@ -105,6 +105,7 @@ import com.example.ads.AdMessage
 import com.example.ads.AdState
 import com.example.model.LibboxAvailability
 import com.example.model.SyncStatus
+import com.example.model.MaintenanceConfig
 import com.example.model.VpnConnectionState
 import com.example.ui.theme.ConnectedEmerald
 import com.example.ui.theme.ConnectingAmber
@@ -218,6 +219,8 @@ fun PulseVpnScreen(
                         connectionState = uiState.connectionState,
                         accentColor = accentColor,
                     )
+
+                    if (uiState.maintenance.enabled) MaintenanceBanner(uiState.maintenance)
 
                     if (isWide) {
                         Row(
@@ -461,7 +464,7 @@ private fun HeroShieldSection(
                         .clip(CircleShape)
                         .testTag("power_shield_button")
                         .clickable(
-                            enabled = !adState.busy,
+                            enabled = !adState.busy && !uiState.maintenance.enabled,
                             interactionSource = interactionSource,
                             indication = ripple(bounded = true, color = accentColor),
                             onClick = onToggleConnection,
@@ -823,6 +826,32 @@ private fun ServerSelectorCard(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun MaintenanceBanner(maintenance: MaintenanceConfig) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = SlateSurface),
+        border = BorderStroke(1.dp, ConnectingAmber),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = maintenance.title.ifBlank { stringResource(R.string.maintenance_default_title) },
+                style = MaterialTheme.typography.titleMedium,
+                color = ConnectingAmber,
+            )
+            Text(
+                text = maintenance.message.ifBlank { stringResource(R.string.maintenance_default_message) },
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary,
+            )
         }
     }
 }

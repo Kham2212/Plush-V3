@@ -18,6 +18,8 @@
     <string name="action_syncing">Syncing…</string>
 
     <string name="label_server_list">Available Servers</string>
+    <string name="maintenance_default_title">VPN maintenance</string>
+    <string name="maintenance_default_message">VPN connections are temporarily unavailable. Sync Config to check for updates.</string>
     <string name="label_remote_config">Remote Config Sync</string>
     <string name="label_transport">Transport</string>
     <string name="label_dns">DNS Mode</string>

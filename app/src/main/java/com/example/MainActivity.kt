@@ -57,7 +57,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val launchVpnAfterNotificationCheck: () -> Unit = {
+                val launchVpnAfterNotificationCheck: () -> Unit = launchVpn@{
+                    if (viewModel.isMaintenanceActive()) return@launchVpn
                     val prepareIntent = viewModel.prepareVpnIntent(context)
                     if (prepareIntent != null) {
                         vpnPermissionLauncher.launch(prepareIntent)
@@ -73,7 +74,8 @@ class MainActivity : ComponentActivity() {
                     launchVpnAfterNotificationCheck()
                 }
 
-                val onConnectionAllowed by rememberUpdatedState(newValue = {
+                val onConnectionAllowed by rememberUpdatedState(newValue = onAllowed@{
+                    if (viewModel.isMaintenanceActive()) return@onAllowed
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                         ContextCompat.checkSelfPermission(
                             context,
@@ -106,7 +108,7 @@ class MainActivity : ComponentActivity() {
 
                             is VpnConnectionState.Disconnected,
                             is VpnConnectionState.Error -> {
-                                rewardedAds.request()
+                                if (!viewModel.isMaintenanceActive()) rewardedAds.request()
                             }
                         }
                     },

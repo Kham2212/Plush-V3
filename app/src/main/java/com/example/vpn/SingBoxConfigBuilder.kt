@@ -1,6 +1,8 @@
 package com.example.vpn
 
+import com.example.model.VlessProfile
 import com.example.model.VmessProfile
+import com.example.model.VpnProfile
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -24,7 +26,7 @@ object SingBoxConfigBuilder {
     )
 
     fun buildConfigJson(
-        profile: VmessProfile,
+        profile: VpnProfile,
         localBypass: Boolean = true,
         modern: Boolean = false,
     ): String {
@@ -44,7 +46,12 @@ object SingBoxConfigBuilder {
         root.put(
             "outbounds",
             JSONArray().apply {
-                put(buildVmessOutbound(profile))
+                put(
+                    when (profile) {
+                        is VmessProfile -> buildVmessOutbound(profile)
+                        is VlessProfile -> buildVlessOutbound(profile)
+                    },
+                )
                 put(
                     JSONObject().apply {
                         put("type", "direct")
@@ -58,7 +65,7 @@ object SingBoxConfigBuilder {
         return root.toString(2)
     }
 
-    private fun buildDnsObject(profile: VmessProfile, modern: Boolean): JSONObject {
+    private fun buildDnsObject(profile: VpnProfile, modern: Boolean): JSONObject {
         val dohServer = JSONObject().apply {
             put("tag", "doh-remote")
             if (modern) {
@@ -168,7 +175,51 @@ object SingBoxConfigBuilder {
         }
     }
 
-    private fun buildRouteObject(profile: VmessProfile, localBypass: Boolean, modern: Boolean): JSONObject {
+    private fun buildVlessOutbound(profile: VlessProfile): JSONObject = JSONObject().apply {
+        // Keep the existing proxy tag so both protocols use the same DNS and routing.
+        put("tag", "vmess-out")
+        put("type", "vless")
+        put("server", profile.address)
+        put("server_port", profile.port)
+        put("uuid", profile.uuid)
+        // sing-box VLESS has no encryption field; the parser accepts only encryption=none.
+        if (profile.flow.isNotEmpty()) put("flow", profile.flow)
+
+        val path = "/" + profile.path.removePrefix("/")
+        val transport = when (profile.network) {
+            "ws" -> JSONObject().put("type", "ws").put("path", path).apply {
+                if (profile.host.isNotBlank()) put("headers", JSONObject().put("Host", profile.host))
+            }
+            "http", "h2" -> JSONObject().put("type", "http").put("path", path).apply {
+                if (profile.host.isNotBlank()) put("host", JSONArray(profile.host.split(',').map { it.trim() }))
+            }
+            "httpupgrade" -> JSONObject().put("type", "httpupgrade").put("path", path).apply {
+                if (profile.host.isNotBlank()) put("host", profile.host)
+            }
+            "grpc" -> JSONObject().put("type", "grpc").put("service_name", profile.serviceName.ifBlank {
+                profile.path.removePrefix("/")
+            })
+            else -> null // Plain TCP uses no transport object.
+        }
+        if (transport != null) put("transport", transport)
+
+        if (profile.tlsEnabled) {
+            put("tls", JSONObject().apply {
+                put("enabled", true)
+                put("server_name", profile.sni.ifBlank { profile.address })
+                if (profile.fingerprint.isNotEmpty() || profile.security == "reality") {
+                    put("utls", JSONObject().put("enabled", true)
+                        .put("fingerprint", profile.fingerprint.ifBlank { "chrome" }))
+                }
+                if (profile.security == "reality") {
+                    put("reality", JSONObject().put("enabled", true)
+                        .put("public_key", profile.publicKey).put("short_id", profile.shortId))
+                }
+            })
+        }
+    }
+
+    private fun buildRouteObject(profile: VpnProfile, localBypass: Boolean, modern: Boolean): JSONObject {
         val rules = JSONArray().apply {
             if (modern) put(JSONObject().put("action", "sniff"))
             put(
@@ -186,9 +237,10 @@ object SingBoxConfigBuilder {
                 )
             }
             if (isIpLiteral(profile.address)) {
+                val prefixLength = if (profile is VlessProfile && profile.address.contains(':')) 128 else 32
                 put(
                     JSONObject().apply {
-                        put("ip_cidr", JSONArray().apply { put("${profile.address}/32") })
+                        put("ip_cidr", JSONArray().put("${profile.address}/$prefixLength"))
                         put("outbound", "direct")
                     },
                 )
