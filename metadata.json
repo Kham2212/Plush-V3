@@ -1,0 +1,6 @@
+{
+  "name": "PulseVPN",
+  "description": "Clean Android VMess (WS+TLS) VPN client powered by Android VpnService and sing-box (libbox) with remote config sync and local IP bypass.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

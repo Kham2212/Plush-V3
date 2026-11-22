@@ -1,0 +1,52 @@
+<resources>
+    <string name="app_name">PulseVPN</string>
+    <string name="app_subtitle">VMess WS+TLS Tunnel</string>
+
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_connecting">Connecting</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_error">Error</string>
+
+    <string name="msg_watch_ad_to_connect">Watch an ad to connect.</string>
+    <string name="msg_ad_loading">Loading ad…</string>
+    <string name="msg_ad_unavailable">Ad unavailable. Continuing to VPN connection.</string>
+    <string name="msg_ad_incomplete">Finish the ad to connect. Tap Connect to retry.</string>
+    <string name="action_connect">Connect</string>
+    <string name="action_disconnect">Disconnect</string>
+    <string name="action_connecting">Connecting…</string>
+    <string name="action_sync_remote">Sync Config</string>
+    <string name="action_syncing">Syncing…</string>
+
+    <string name="label_server_list">Available Servers</string>
+    <string name="label_remote_config">Remote Config Sync</string>
+    <string name="label_transport">Transport</string>
+    <string name="label_dns">DNS Mode</string>
+    <string name="label_core_engine">Core Engine</string>
+    <string name="label_last_sync">Last Sync</string>
+    <string name="label_download_speed">Download</string>
+    <string name="label_upload_speed">Upload</string>
+    <string name="value_speed_zero">0.0 KB/s</string>
+
+    <string name="value_transport_ws_tls">WS + TLS</string>
+    <string name="value_transport_ws">WS (Plain)</string>
+    <string name="value_dns_doh">DoH (1.1.1.1)</string>
+    <string name="value_never_synced">Using cached / default</string>
+
+    <string name="notification_channel_id">pulsevpn_tunnel_channel</string>
+    <string name="notification_channel_name">VPN Tunnel Status</string>
+    <string name="notification_channel_desc">Shows ongoing PulseVPN connection status and quick disconnect action.</string>
+    <string name="notification_title_connected">PulseVPN Connected</string>
+    <string name="notification_title_connecting">PulseVPN Connecting</string>
+    <string name="notification_text_tunnel_active">VPN tunnel is active.</string>
+    <string name="notification_text_establishing">Establishing sing-box TUN interface…</string>
+
+
+    <string name="label_numbered_server">Server %1$d</string>
+    <string name="msg_server_selected">Selected %1$s</string>
+    <string name="msg_connection_failed">Could not connect to the VPN. Please try again.</string>
+    <string name="msg_vpn_permission_denied">VPN permission is required to establish the tunnel.</string>
+    <string name="msg_sync_success">Server list updated.</string>
+    <string name="msg_sync_fallback">Could not refresh the server list. Using saved servers.</string>
+    <string name="msg_libbox_missing_banner">libbox.aar not found in app/libs/. Add libbox.aar and rebuild the app to enable VPN connections.</string>
+    <string name="msg_libbox_ready_banner">sing-box libbox core loaded (%1$s).</string>
+</resources>
