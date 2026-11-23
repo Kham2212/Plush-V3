@@ -92,7 +92,10 @@ class VlessRemoteConfigTest {
             assertTrue(vmessOutbound.getJSONObject("tls").getBoolean("enabled"))
 
             val doh = config.getJSONObject("dns").getJSONArray("servers").getJSONObject(0)
-            assertEquals(vmess.getJSONObject("dns").getJSONArray("servers").getJSONObject(0).toString(), doh.toString())
+            val vmessDoh = vmess.getJSONObject("dns").getJSONArray("servers").getJSONObject(0)
+            assertEquals("vmess-out", vmessDoh.getString("detour"))
+            assertEquals("vmess-out", vmess.getJSONObject("route").getString("final"))
+            assertEquals("vless-out", outbound.getString("tag"))
             assertEquals(outbound.getString("tag"), doh.getString("detour"))
             assertEquals(outbound.getString("tag"), config.getJSONObject("route").getString("final"))
             assertEquals(
@@ -117,9 +120,50 @@ class VlessRemoteConfigTest {
         assertTrue(reality.getBoolean("enabled"))
         assertEquals("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", reality.getString("public_key"))
         assertEquals("abcd", reality.getString("short_id"))
-        val rules = config.getJSONObject("route").getJSONArray("rules")
-        val cidrs = (0 until rules.length()).mapNotNull { rules.getJSONObject(it).optJSONArray("ip_cidr") }
-        assertEquals("2001:db8::1/128", cidrs.single().getString(0))
+    }
+
+    @Test
+    fun `modern proxy bootstrap is separate from tunneled app DNS`() {
+        val profile = VlessUriParser.parse(WS_LINK).getOrThrow()
+        val config = JSONObject(SingBoxConfigBuilder.buildConfigJson(profile, modern = true))
+        val outbound = config.getJSONArray("outbounds").getJSONObject(0)
+        val dns = config.getJSONObject("dns")
+        val servers = dns.getJSONArray("servers")
+        val doh = servers.getJSONObject(0)
+        val bootstrap = servers.getJSONObject(1)
+        assertEquals(doh.getString("tag"), dns.getString("final"))
+        assertEquals("/dns-query", doh.getString("path"))
+        assertEquals(bootstrap.getString("tag"), outbound.getString("domain_resolver"))
+        assertFalse(bootstrap.has("detour"))
+        assertEquals(0, dns.getJSONArray("rules").length())
+    }
+
+    @Test
+    fun `DNS has priority and only LAN routes are sent direct when bypass is enabled`() {
+        val profiles = listOf(WS_LINK, "vless://$UUID@[2001:db8::1]:443").map {
+            parseVpnUri(it).getOrThrow()
+        }
+        for (profile in profiles) for (modern in listOf(false, true)) for (localBypass in listOf(false, true)) {
+            val config = JSONObject(SingBoxConfigBuilder.buildConfigJson(profile, localBypass, modern))
+            val tun = config.getJSONArray("inbounds").getJSONObject(0)
+            val route = config.getJSONObject("route")
+            val rules = route.getJSONArray("rules")
+            val firstRule = rules.getJSONObject(0)
+            assertEquals(53, firstRule.getInt("port"))
+            assertEquals("hijack-dns", firstRule.getString("action"))
+            val directRules = (0 until rules.length()).map { rules.getJSONObject(it) }.filter {
+                it.optString("outbound") == "direct"
+            }
+            if (localBypass) {
+                val direct = directRules.single()
+                assertFalse(direct.has("domain"))
+                assertEquals(tun.getJSONArray("route_exclude_address").toString(), direct.getJSONArray("ip_cidr").toString())
+                assertFalse(direct.getJSONArray("ip_cidr").toString().contains(profile.address))
+            } else {
+                assertTrue(directRules.isEmpty())
+                assertFalse(tun.has("route_exclude_address"))
+            }
+        }
     }
 
     private companion object {

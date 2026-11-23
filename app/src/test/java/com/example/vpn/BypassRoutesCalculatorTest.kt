@@ -33,6 +33,8 @@ class BypassRoutesCalculatorTest {
         // Public internet IPs & boundaries adjacent to private ranges MUST enter tunnel
         assertTrue(isRoutedThroughTunnel("1.1.1.1", routes))
         assertTrue(isRoutedThroughTunnel("8.8.8.8", routes))
+        assertTrue(isRoutedThroughTunnel("192.0.0.9", routes))
+        assertTrue(isRoutedThroughTunnel("192.0.0.10", routes))
         assertTrue(isRoutedThroughTunnel("9.255.255.255", routes))
         assertTrue(isRoutedThroughTunnel("11.0.0.1", routes))
         assertTrue(isRoutedThroughTunnel("172.15.255.255", routes))

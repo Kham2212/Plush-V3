@@ -17,6 +17,8 @@ data class TunSpec(
     val inet4Addresses: List<TunPrefixSpec>,
     val inet6Addresses: List<TunPrefixSpec>,
     val dnsServerAddress: String?,
+    val inet4Routes: List<TunPrefixSpec> = emptyList(),
+    val inet6Routes: List<TunPrefixSpec> = emptyList(),
 )
 
 data class NetworkInterfaceSpec(
@@ -421,6 +423,8 @@ object LibboxBridge {
             inet4Addresses = inet4,
             inet6Addresses = inet6,
             dnsServerAddress = dnsAddress,
+            inet4Routes = extractRoutePrefixList(optionsType, tunOptions, "getInet4RouteRange"),
+            inet6Routes = extractRoutePrefixList(optionsType, tunOptions, "getInet6RouteRange"),
         )
     }
 

@@ -23,6 +23,7 @@ import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.data.ConfigRepository
+import com.example.data.RoutingRulesStore
 import com.example.model.VpnConnectionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -130,7 +131,9 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
             tunnelStartup.lock()
             try {
                 if (!isActive) return@launch
-                closeActiveTunnelOnly()
+                // Keep Android routing to the old TUN while libbox restarts. Android switches
+                // to the replacement in establish(), then openTun closes the prior descriptor.
+                closeCoreOnly()
 
                 val profile = parseVpnUri(vmessUri).getOrThrow()
                 val displayName = serverName?.takeIf { it.isNotBlank() } ?: profile.remarks
@@ -145,14 +148,12 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
                 VpnStateHolder.appendLog(
                     "Starting BoxService -> $displayName (${profile.address}:${profile.port})…",
                 )
+                val routingRules = RoutingRulesStore(applicationContext).load()
                 val startedService = LibboxBridge.startService(this@VmessVpnService) { modern ->
-                    SingBoxConfigBuilder.buildConfigJson(profile, localBypass, modern)
+                    SingBoxConfigBuilder.buildConfigJson(profile, localBypass, modern, routingRules)
                 }
                 boxService.set(startedService)
-                if (!isActive || isStopping.get()) {
-                    closeActiveTunnelOnly()
-                    return@launch
-                }
+                if (!isActive || isStopping.get()) return@launch
 
                 withContext(Dispatchers.Main.immediate) {
                     if (isStopping.get()) return@withContext
@@ -167,8 +168,9 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
                     )
                 }
             } catch (t: Throwable) {
-                closeActiveTunnelOnly()
+                // A superseding connect owns the next handoff. An actual stop is cleaned up below.
                 if (isActive && !isStopping.get()) {
+                    closeActiveTunnelOnly()
                     withContext(Dispatchers.Main.immediate) {
                         if (isStopping.get()) return@withContext
                         Log.e(TAG, "Failed to start sing-box VPN", t)
@@ -256,24 +258,29 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
             builder.addAddress(addr.address, addr.prefix)
         }
 
-        if (currentLocalBypass) {
-            val tunnelRoutes = BypassRoutesCalculator.computeTunnelIpv4Routes()
-            for (route in tunnelRoutes) {
-                builder.addRoute(route.address, route.prefixLength)
+        // Modern libbox supplies the route ranges after applying route_exclude_address.
+        val ipv4Routes = spec.inet4Routes.ifEmpty {
+            if (currentLocalBypass) {
+                BypassRoutesCalculator.computeTunnelIpv4Routes().map {
+                    TunPrefixSpec(it.address, it.prefixLength)
+                }
+            } else {
+                listOf(TunPrefixSpec("0.0.0.0", 0))
             }
+        }
+        val ipv6Routes = if (spec.inet6Addresses.isEmpty()) {
+            emptyList()
         } else {
-            builder.addRoute("0.0.0.0", 0)
+            spec.inet6Routes.ifEmpty { listOf(TunPrefixSpec("::", 0)) }
+        }
+        for (route in ipv4Routes + ipv6Routes) {
+            builder.addRoute(route.address, route.prefix)
         }
 
+        // The DNS stub is inside TUN even if its private subnet is otherwise excluded.
         val dnsIp = spec.dnsServerAddress ?: "172.19.0.2"
-        val routedDnsIp = try {
-            builder.addDnsServer(dnsIp)
-            dnsIp
-        } catch (_: IllegalArgumentException) {
-            "1.1.1.1".also { builder.addDnsServer(it) }
-        }
-        // Keep the tunnel DNS reachable even when LAN routes bypass the VPN.
-        builder.addRoute(routedDnsIp, if (':' in routedDnsIp) 128 else 32)
+        builder.addDnsServer(dnsIp)
+        builder.addRoute(dnsIp, if (':' in dnsIp) 128 else 32)
 
         runCatching { builder.addDisallowedApplication(packageName) }
 
@@ -427,11 +434,14 @@ class VmessVpnService : VpnService(), LibboxPlatformCallbacks {
         VpnStateHolder.appendLog(message)
     }
 
-    private fun closeActiveTunnelOnly() {
+    private fun closeCoreOnly() {
         stopTrafficMonitor()
         closeDefaultInterfaceMonitor(null)
         LibboxBridge.stopService(boxService.getAndSet(null))
+    }
 
+    private fun closeActiveTunnelOnly() {
+        closeCoreOnly()
         closeTunFd(tunFd.getAndSet(null))
     }
 

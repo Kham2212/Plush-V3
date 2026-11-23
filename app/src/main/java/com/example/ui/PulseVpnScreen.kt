@@ -59,6 +59,7 @@ import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.RadioButtonChecked
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.WifiProtectedSetup
 import androidx.compose.material3.Button
@@ -75,6 +76,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
@@ -135,6 +137,7 @@ fun PulseVpnScreen(
     onConsumeSnackbar: () -> Unit,
     onConsumeAdUnavailable: () -> Unit = {},
     adState: AdState = AdState(),
+    onOpenSettings: (() -> Unit)? = null,
     banner: @Composable () -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -219,6 +222,17 @@ fun PulseVpnScreen(
                         connectionState = uiState.connectionState,
                         accentColor = accentColor,
                     )
+
+                    if (onOpenSettings != null) {
+                        TextButton(
+                            onClick = onOpenSettings,
+                            modifier = Modifier.align(Alignment.End),
+                        ) {
+                            Icon(Icons.Rounded.Settings, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.label_settings))
+                        }
+                    }
 
                     if (uiState.maintenance.enabled) MaintenanceBanner(uiState.maintenance)
 
