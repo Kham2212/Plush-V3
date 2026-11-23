@@ -13,6 +13,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalContext
@@ -25,6 +28,7 @@ import com.example.ads.RewardedAdsViewModel
 import com.example.ads.UnityBanner
 import com.example.model.VpnConnectionState
 import com.example.ui.PulseVpnScreen
+import com.example.ui.RoutingRulesSettings
 import com.example.ui.VpnViewModel
 import com.example.ui.theme.PulseVpnTheme
 
@@ -95,7 +99,16 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                PulseVpnScreen(
+                var showSettings by rememberSaveable { mutableStateOf(false) }
+                if (showSettings) {
+                    val rules by viewModel.routingRules.collectAsStateWithLifecycle()
+                    RoutingRulesSettings(
+                        rules = rules,
+                        onBack = { showSettings = false },
+                        onSaveRule = viewModel::saveRoutingRule,
+                        onDeleteRule = viewModel::deleteRoutingRule,
+                    )
+                } else PulseVpnScreen(
                     uiState = uiState,
                     adState = adState,
                     banner = { if (adState.initialized) UnityBanner(this@MainActivity) },
@@ -116,6 +129,7 @@ class MainActivity : ComponentActivity() {
                     onSyncRemote = { viewModel.syncRemoteConfig(isAutoLaunch = false) },
                     onDismissError = { viewModel.clearErrorState() },
                     onConsumeSnackbar = { viewModel.consumeSnackbar() },
+                    onOpenSettings = { showSettings = true },
                     onConsumeAdUnavailable = { rewardedAds.consumeUnavailableMessage() },
                 )
             }

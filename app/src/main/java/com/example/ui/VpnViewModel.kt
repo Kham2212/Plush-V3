@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.R
 import com.example.data.CachedVpnConfig
 import com.example.data.ConfigRepository
+import com.example.data.RoutingRulesStore
+import com.example.model.RoutingRule
 import com.example.model.LibboxAvailability
 import com.example.model.MaintenanceConfig
 import com.example.model.SyncStatus
@@ -21,6 +23,7 @@ import com.example.vpn.VpnStateHolder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -61,6 +64,29 @@ class VpnViewModel internal constructor(
 
     constructor(application: Application) : this(application, ConfigRepository(application))
 
+    private val routingRulesStore = RoutingRulesStore(application)
+    private val routingRuleState = MutableStateFlow(routingRulesStore.load())
+    val routingRules = routingRuleState.asStateFlow()
+
+    fun saveRoutingRule(rule: RoutingRule) {
+        val normalized = rule.validated() ?: return
+        val rules = routingRuleState.value
+        updateRoutingRules(
+            if (rules.any { it.id == rule.id }) rules.map { if (it.id == rule.id) normalized else it }
+            else rules + normalized,
+        )
+    }
+
+    fun deleteRoutingRule(id: String) {
+        updateRoutingRules(routingRuleState.value.filterNot { it.id == id })
+    }
+
+    private fun updateRoutingRules(rules: List<RoutingRule>) {
+        routingRulesStore.save(rules)
+        routingRuleState.value = rules
+    }
+
+    private var disconnectRequested = false
     private val localState = MutableStateFlow(toSnapshot(repository.loadCachedConfig()))
 
     val uiState: StateFlow<VpnUiState> = combine(
@@ -115,6 +141,7 @@ class VpnViewModel internal constructor(
             if (result.isSuccess) {
                 val updated = repository.loadCachedConfig()
                 val msg = app.getString(R.string.msg_sync_success)
+                val previous = localState.value
                 localState.update { current ->
                     current.copy(
                         activeUri = updated.selectedUri,
@@ -129,6 +156,11 @@ class VpnViewModel internal constructor(
                     )
                 }
                 VpnStateHolder.appendLog(msg)
+                if (!updated.maintenance.enabled && canReconnect() &&
+                    (previous.activeUri != updated.selectedUri || previous.localBypass != updated.localBypass)
+                ) {
+                    startVpnConnection(app)
+                }
             } else {
                 val reason = result.exceptionOrNull()?.message ?: "Network unavailable"
                 val fallbackMsg = app.getString(R.string.msg_sync_fallback)
@@ -161,10 +193,7 @@ class VpnViewModel internal constructor(
         }
         VpnStateHolder.appendLog("Selected server: $chosenName")
 
-        when (VpnStateHolder.connectionState.value) {
-            VpnConnectionState.Connected, VpnConnectionState.Connecting -> startVpnConnection(context)
-            else -> Unit
-        }
+        if (canReconnect()) startVpnConnection(context)
     }
 
     private fun serverChoices(cached: CachedVpnConfig): List<ServerChoice> =
@@ -184,6 +213,11 @@ class VpnViewModel internal constructor(
             ServerChoice(server.id, name)
         }
 
+    private fun canReconnect(): Boolean = !disconnectRequested && when (VpnStateHolder.connectionState.value) {
+        VpnConnectionState.Connected, VpnConnectionState.Connecting -> true
+        else -> false
+    }
+
     fun isMaintenanceActive(): Boolean = localState.value.maintenance.enabled
 
     fun prepareVpnIntent(context: Context): android.content.Intent? {
@@ -193,6 +227,7 @@ class VpnViewModel internal constructor(
     fun startVpnConnection(context: Context) {
         val snapshot = localState.value
         if (snapshot.maintenance.enabled) return
+        disconnectRequested = false
         val selectedName = snapshot.servers.firstOrNull { it.id == snapshot.selectedServerId }?.name
         VpnStateHolder.updateState(VpnConnectionState.Connecting, selectedName)
         VmessVpnService.startConnect(
@@ -210,6 +245,7 @@ class VpnViewModel internal constructor(
     }
 
     fun disconnectVpn(context: Context) {
+        disconnectRequested = true
         VmessVpnService.stopDisconnect(context)
     }
 

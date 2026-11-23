@@ -14,11 +14,19 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.example.model.MaintenanceConfig
+import com.example.model.RoutingPreset
+import com.example.model.RoutingRule
 import com.example.model.VpnConnectionState
 import com.example.ads.AdMessage
 import com.example.ads.AdState
@@ -139,6 +147,73 @@ class PulseVpnScreenTest {
             org.junit.Assert.assertTrue(syncRequested)
         }
     }
+    @Test
+    fun `settings lets users add disable edit and delete a routing rule`() {
+        var settings by mutableStateOf(false)
+        var rules by mutableStateOf(emptyList<RoutingRule>())
+        compose.setContent {
+            PulseVpnTheme {
+                if (settings) {
+                    RoutingRulesSettings(
+                        rules = rules,
+                        onBack = { settings = false },
+                        onSaveRule = { updated -> rules = listOf(updated) },
+                        onDeleteRule = { id -> rules = rules.filterNot { it.id == id } },
+                    )
+                } else {
+                    PulseVpnScreen(
+                        uiState = VpnUiState(),
+                        onToggleConnection = {},
+                        onSelectServer = {},
+                        onSyncRemote = {},
+                        onDismissError = {},
+                        onConsumeSnackbar = {},
+                        onOpenSettings = { settings = true },
+                    )
+                }
+            }
+        }
+        compose.onNodeWithText("Settings").performClick()
+        compose.onNodeWithText("Routing Rules").assertExists()
+        compose.onNodeWithText("Add rule").performClick()
+        compose.onNodeWithText("Save rule").assertIsNotEnabled()
+        compose.onNodeWithText("Action: Proxy").performClick()
+        compose.onNodeWithText("Block").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("example.com")
+        compose.onNodeWithText("Save rule").performClick()
+        compose.onNodeWithText("Block · Domain").assertExists()
+        compose.onNodeWithContentDescription("Enable rule for example.com").performClick().assertIsOff()
+
+        compose.onNodeWithText("Edit rule").performClick()
+        compose.onNode(hasSetTextAction()).performTextReplacement("other.example")
+        compose.onNodeWithText("Save rule").performClick()
+        compose.onNodeWithContentDescription("Enable rule for other.example").assertIsOff()
+        compose.onNodeWithText("Delete rule").performClick()
+        compose.onNodeWithText("No custom rules yet.").assertExists()
+    }
+
+    @Test
+    @Config(qualifiers = "w440dp-h1000dp")
+    fun `settings shows presets off and lets users enable UDP blocking`() {
+        var rules by mutableStateOf(RoutingPreset.entries.map { it.rule() })
+        compose.setContent {
+            PulseVpnTheme {
+                RoutingRulesSettings(
+                    rules = rules,
+                    onBack = {},
+                    onSaveRule = { rule -> rules = rules.map { if (it.id == rule.id) rule else it } },
+                    onDeleteRule = {},
+                )
+            }
+        }
+        compose.onNodeWithContentDescription("Enable rule for LAN / Private IP Bypass").assertIsOff()
+        compose.onNodeWithContentDescription("Enable rule for Block UDP 443")
+            .assertIsOff().performClick().assertIsOn()
+        compose.onNodeWithText("UDP destination port 443").assertExists()
+        compose.onNodeWithContentDescription("Enable rule for Proxy Google").assertIsOff()
+        compose.onNodeWithContentDescription("Enable rule for Bypass CN / Private Domains & Public DNS").assertIsOff()
+    }
+
     @Test
     @Config(qualifiers = "w320dp-h480dp")
     fun `bottom banner reserves space below the connection control`() {
