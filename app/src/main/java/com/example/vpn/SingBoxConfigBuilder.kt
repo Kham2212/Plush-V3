@@ -120,6 +120,7 @@ object SingBoxConfigBuilder {
             )
             put("rules", dnsRules)
             put("final", DOH_TAG)
+            put("reverse_mapping", true)
             put("strategy", if (modern) "prefer_ipv4" else "ipv4_only")
         }
     }

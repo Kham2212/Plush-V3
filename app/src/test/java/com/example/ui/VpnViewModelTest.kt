@@ -17,8 +17,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
@@ -27,6 +30,58 @@ import java.util.Base64
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class VpnViewModelTest {
+
+    @Test
+    fun `maintenance sync saves the new policy for the next manual connection`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val vmess = VmessUriParser.DEFAULT_VMESS_URI
+        val vless = "vless://b831381d-6324-4d53-ad4f-8cda48b30811@edge.example.net:443?type=ws&security=tls"
+        val body = java.util.concurrent.atomic.AtomicReference(
+            """{"local_bypass":true,"servers":[{"id":"edge","uri":"$vmess"}]}""",
+        )
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("fixture").body(body.get().toResponseBody()).build()
+        }.build()
+        val repository = ConfigRepository(app, client)
+        runBlocking { repository.syncFromRemote().getOrThrow() }
+        val controller = Robolectric.buildService(VmessVpnService::class.java).create()
+        val appShadow = shadowOf(app)
+        val main = shadowOf(Looper.getMainLooper())
+        fun awaitMaintenance(enabled: Boolean, viewModel: VpnViewModel) {
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+            while (viewModel.isMaintenanceActive() != enabled && System.nanoTime() < deadline) {
+                main.idle()
+                if (viewModel.isMaintenanceActive() != enabled) Thread.sleep(10)
+            }
+            assertEquals(enabled, viewModel.isMaintenanceActive())
+        }
+
+        try {
+            VpnStateHolder.updateState(VpnConnectionState.Connected)
+            body.set("""{"maintenance":true,"local_bypass":false,"servers":[{"id":"edge","uri":"$vless"}]}""")
+            val viewModel = VpnViewModel(app, repository)
+            awaitMaintenance(true, viewModel)
+            assertTrue(shadowOf(controller.get()).isStoppedBySelf)
+            assertEquals(VpnConnectionState.Disconnected, VpnStateHolder.connectionState.value)
+            viewModel.startVpnConnection(app)
+            assertNull(appShadow.nextStartedService)
+
+            body.set("""{"maintenance":false}""")
+            viewModel.syncRemoteConfig()
+            awaitMaintenance(false, viewModel)
+            assertNull(appShadow.nextStartedService)
+
+            viewModel.startVpnConnection(app)
+            val connect = appShadow.nextStartedService
+            assertEquals(VmessVpnService.ACTION_CONNECT, connect.action)
+            assertEquals(vless, connect.getStringExtra(VmessVpnService.EXTRA_VMESS_URI))
+            assertFalse(connect.getBooleanExtra(VmessVpnService.EXTRA_LOCAL_BYPASS, true))
+        } finally {
+            controller.destroy()
+            VpnStateHolder.updateState(VpnConnectionState.Disconnected)
+        }
+    }
 
     @Test
     fun `a sync changing a running tunnel policy starts the new managed configuration`() {
